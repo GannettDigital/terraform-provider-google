@@ -77,9 +77,21 @@ The `raw_disk` block supports:
 
 * `family` - (Optional) The name of the image family to which this image belongs.
 
+* `labels` - (Optional) A set of key/value label pairs to assign to the image.
+
 ## Attributes Reference
 
 In addition to the arguments listed above, the following computed attributes are
 exported:
 
 * `self_link` - The URI of the created resource.
+
+* `label_fingerprint` - The fingerprint of the assigned labels.
+
+## Import
+
+VM image can be imported using the `name`, e.g.
+
+```
+$ terraform import google_compute_image.web-image my-custom-image
+```

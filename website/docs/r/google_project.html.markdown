@@ -1,7 +1,7 @@
 ---
 layout: "google"
 page_title: "Google: google_project"
-sidebar_current: "docs-google-project"
+sidebar_current: "docs-google-project-x"
 description: |-
  Allows management of a Google Cloud Platform project.
 ---
@@ -71,8 +71,7 @@ The following arguments are supported:
     the organization. See [Google Cloud Billing API Access Control](https://cloud.google.com/billing/v1/how-tos/access-control)
     for more details.
 
-* `name` - (Optional) The display name of the project.
-    This is required if you are creating a new project.
+* `name` - (Required) The display name of the project.
 
 * `skip_delete` - (Optional) If true, the Terraform resource can be deleted
     without deleting the Project via the Google API.
@@ -80,6 +79,8 @@ The following arguments are supported:
 * `policy_data` - (Deprecated) The IAM policy associated with the project.
     This argument is no longer supported, and will be removed in a future version
     of Terraform. It should be replaced with a `google_project_iam_policy` resource.
+
+* `labels` - (Optional) A set of key/value label pairs to assign to the project.
 
 ## Attributes Reference
 

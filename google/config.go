@@ -1,6 +1,7 @@
 package google
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,18 +12,25 @@ import (
 	"github.com/hashicorp/terraform/helper/logging"
 	"github.com/hashicorp/terraform/helper/pathorcontents"
 	"github.com/hashicorp/terraform/terraform"
+
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"golang.org/x/oauth2/jwt"
 	"google.golang.org/api/bigquery/v2"
 	"google.golang.org/api/cloudbilling/v1"
 	"google.golang.org/api/cloudresourcemanager/v1"
+	resourceManagerV2Beta1 "google.golang.org/api/cloudresourcemanager/v2beta1"
+	computeBeta "google.golang.org/api/compute/v0.beta"
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/container/v1"
 	"google.golang.org/api/dns/v1"
 	"google.golang.org/api/iam/v1"
+	cloudlogging "google.golang.org/api/logging/v2"
 	"google.golang.org/api/pubsub/v1"
+	"google.golang.org/api/runtimeconfig/v1beta1"
 	"google.golang.org/api/servicemanagement/v1"
+	"google.golang.org/api/sourcerepo/v1"
+	"google.golang.org/api/spanner/v1"
 	"google.golang.org/api/sqladmin/v1beta4"
 	"google.golang.org/api/storage/v1"
 )
@@ -34,17 +42,25 @@ type Config struct {
 	Project     string
 	Region      string
 
-	clientBilling         *cloudbilling.Service
-	clientCompute         *compute.Service
-	clientContainer       *container.Service
-	clientDns             *dns.Service
-	clientPubsub          *pubsub.Service
-	clientResourceManager *cloudresourcemanager.Service
-	clientStorage         *storage.Service
-	clientSqlAdmin        *sqladmin.Service
-	clientIAM             *iam.Service
-	clientServiceMan      *servicemanagement.APIService
-	clientBigQuery        *bigquery.Service
+	clientBilling                *cloudbilling.Service
+	clientCompute                *compute.Service
+	clientComputeBeta            *computeBeta.Service
+	clientContainer              *container.Service
+	clientDns                    *dns.Service
+	clientLogging                *cloudlogging.Service
+	clientPubsub                 *pubsub.Service
+	clientResourceManager        *cloudresourcemanager.Service
+	clientResourceManagerV2Beta1 *resourceManagerV2Beta1.Service
+	clientRuntimeconfig          *runtimeconfig.Service
+	clientSpanner                *spanner.Service
+	clientSourceRepo             *sourcerepo.Service
+	clientStorage                *storage.Service
+	clientSqlAdmin               *sqladmin.Service
+	clientIAM                    *iam.Service
+	clientServiceMan             *servicemanagement.APIService
+	clientBigQuery               *bigquery.Service
+
+	bigtableClientFactory *BigtableClientFactory
 }
 
 func (c *Config) loadAndValidate() error {
@@ -57,6 +73,7 @@ func (c *Config) loadAndValidate() error {
 	}
 
 	var client *http.Client
+	var tokenSource oauth2.TokenSource
 
 	if c.Credentials != "" {
 		contents, _, err := pathorcontents.Read(c.Credentials)
@@ -85,12 +102,18 @@ func (c *Config) loadAndValidate() error {
 		// Initiate an http.Client. The following GET request will be
 		// authorized and authenticated on the behalf of
 		// your service account.
-		client = conf.Client(oauth2.NoContext)
+		client = conf.Client(context.Background())
 
+		tokenSource = conf.TokenSource(context.Background())
 	} else {
 		log.Printf("[INFO] Authenticating using DefaultClient")
 		err := error(nil)
-		client, err = google.DefaultClient(oauth2.NoContext, clientScopes...)
+		client, err = google.DefaultClient(context.Background(), clientScopes...)
+		if err != nil {
+			return err
+		}
+
+		tokenSource, err = google.DefaultTokenSource(context.Background(), clientScopes...)
 		if err != nil {
 			return err
 		}
@@ -111,6 +134,13 @@ func (c *Config) loadAndValidate() error {
 	}
 	c.clientCompute.UserAgent = userAgent
 
+	log.Printf("[INFO] Instantiating GCE Beta client...")
+	c.clientComputeBeta, err = computeBeta.New(client)
+	if err != nil {
+		return err
+	}
+	c.clientComputeBeta.UserAgent = userAgent
+
 	log.Printf("[INFO] Instantiating GKE client...")
 	c.clientContainer, err = container.New(client)
 	if err != nil {
@@ -124,6 +154,13 @@ func (c *Config) loadAndValidate() error {
 		return err
 	}
 	c.clientDns.UserAgent = userAgent
+
+	log.Printf("[INFO] Instantiating Google Stackdriver Logging client...")
+	c.clientLogging, err = cloudlogging.New(client)
+	if err != nil {
+		return err
+	}
+	c.clientLogging.UserAgent = userAgent
 
 	log.Printf("[INFO] Instantiating Google Storage Client...")
 	c.clientStorage, err = storage.New(client)
@@ -153,6 +190,20 @@ func (c *Config) loadAndValidate() error {
 	}
 	c.clientResourceManager.UserAgent = userAgent
 
+	log.Printf("[INFO] Instantiating Google Cloud ResourceManager V Client...")
+	c.clientResourceManagerV2Beta1, err = resourceManagerV2Beta1.New(client)
+	if err != nil {
+		return err
+	}
+	c.clientResourceManagerV2Beta1.UserAgent = userAgent
+
+	log.Printf("[INFO] Instantiating Google Cloud Runtimeconfig Client...")
+	c.clientRuntimeconfig, err = runtimeconfig.New(client)
+	if err != nil {
+		return err
+	}
+	c.clientRuntimeconfig.UserAgent = userAgent
+
 	log.Printf("[INFO] Instantiating Google Cloud IAM Client...")
 	c.clientIAM, err = iam.New(client)
 	if err != nil {
@@ -180,6 +231,25 @@ func (c *Config) loadAndValidate() error {
 		return err
 	}
 	c.clientBigQuery.UserAgent = userAgent
+
+	c.bigtableClientFactory = &BigtableClientFactory{
+		UserAgent:   userAgent,
+		TokenSource: tokenSource,
+	}
+
+	log.Printf("[INFO] Instantiating Google Cloud Source Repo Client...")
+	c.clientSourceRepo, err = sourcerepo.New(client)
+	if err != nil {
+		return err
+	}
+	c.clientSourceRepo.UserAgent = userAgent
+
+	log.Printf("[INFO] Instantiating Google Cloud Spanner Client...")
+	c.clientSpanner, err = spanner.New(client)
+	if err != nil {
+		return err
+	}
+	c.clientSpanner.UserAgent = userAgent
 
 	return nil
 }
